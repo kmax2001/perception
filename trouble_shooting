@@ -1,0 +1,3 @@
+export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libtiff.so.5
+foundation stereo 들어가서 asset baseline 조정하기
+roslaunch realsense2_camera rs_camera.launch enable_infra1:=true enable_infra2:=true infra_width:=640 infra_height:=480 infra_fps:=15 emitter_enabled:=false
