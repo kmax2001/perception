@@ -55,9 +55,14 @@ class RGBDSubscriber:
 
         self.lockl = threading.Lock()
         self.lockr = threading.Lock()
+        self.lockd = threading.Lock()
+        self.lockrgb = threading.Lock()
+
         rospy.Subscriber("/camera/color/camera_info", CameraInfo, self.camera_info_callback)
         rospy.Subscriber("/camera/infra1/image_rect_raw", Image, self.IR1_callback, queue_size = 1)
         rospy.Subscriber("/camera/infra2/image_rect_raw", Image, self.IR2_callback, queue_size = 1)
+        rospy.Subscriber("/camera/depth/image_rect_raw", Image, self.depth_callback, queue_size = 1)
+        #rospy.Subscriber("/camera/color/image_raw", Image, self.rgb_callback, queue_size=1)
         #self.ts = message
 
         self.pcd_pub = rospy.Publisher('/perception/pointcloud', PointCloud2, queue_size = 1)
@@ -124,6 +129,29 @@ class RGBDSubscriber:
         self.image_predictor.load_state_dict(ckpt['model'])
         self.image_predictor.cuda().eval()
 
+    def depth_callback(self, msg):
+        if msg.encoding != "16UC1":
+            rospy.logwarn(f"unexpected encoding: {msg.encoding}")
+            return
+        if not self.lockd.acquire(blocking=False):
+            return
+        depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
+
+        np.save("depth.npy", depth_image)
+
+    def rgb_callback(self, msg):
+        try:
+            cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+        except Exception as e:
+            rospy.logerr(f"CV Bridge error: {e}")
+            return
+        if not self.lockrgb.acquire(blocking=False):
+            return
+
+        self.rgb_image = cv_image
+        self.rgb_image = cv2.resize(self.rgb_image, fx=self.args.scale, fy=self.args.scale, dsize=None)
+        cv2.imwrite("rgb_img.png", self.rgb_image)
+
     def convert_numpy_to_pointcloud2(self, points, frame_id="map"):
         """
         points: numpy array of shape (N, 3) or (N, 6) if RGB included
@@ -166,6 +194,8 @@ class RGBDSubscriber:
                 imgli_ori = self.left_image.copy()
                 self.lockl.release()
                 self.lockr.release()
+                self.lockd.release()
+                #self.lockrgb.release()
                 if self.RUN_FS:
                     with torch.inference_mode():
                         self.disp = self.image_predictor(li, ri, iters=self.args.valid_iters, test_mode=True)
@@ -187,6 +217,7 @@ class RGBDSubscriber:
                             baseline = float(lines[1])
                         K[:2] *= args.scale
                         depth = K[0,0]*baseline/self.disp
+                        np.save("depth.npy", depth)
                         xyz_map = depth2xyzmap(depth, K)
                         pcd = toOpen3dCloud(xyz_map.reshape(-1, 3), imgli_ori.reshape(-1, 3))
                         keep_mask = (np.asarray(pcd.points)[:, 2] > 0) & (
